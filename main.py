@@ -1,53 +1,162 @@
+pip install streamlit plotly numpy matplotlib
 import streamlit as st
 import numpy as np
+import plotly.graph_objects as go
+import time
+import math
 import matplotlib.pyplot as plt
-from microlensing_simulation import simulate_microlensing_lightcurve # 위에서 만든 시뮬레이션 함수 임포트
 
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide") # 넓은 레이아웃 사용
 
-st.title("외계행성 미세 중력 관측 시뮬레이션")
+st.title("원형 광원과 가림막 원 시뮬레이션")
+
 st.markdown("""
-이 앱은 미세 중력 렌즈 현상(Microlensing)을 시뮬레이션하여 외계행성 탐색 원리를 시각적으로 보여줍니다.
+이 앱은 원형 광원이 있고, 다른 원이 그 광원 앞을 지나갈 때 빛의 밝기가 어떻게 변하는지 실시간으로 보여줍니다.
+가림막 원이 광원을 가리는 면적에 따라 빛의 밝기(그래프)가 변화합니다.
 """)
 
-st.sidebar.header("시뮬레이션 매개변수 설정")
+# --- 원의 교차 면적 계산 함수 ---
+# 출처: https://stackoverflow.com/questions/42436329/area-of-intersection-of-two-circles
+def circle_intersection_area(d, r1, r2):
+    """
+    두 원의 교차 면적을 계산합니다.
+    d: 두 원의 중심 간 거리
+    r1: 첫 번째 원의 반지름
+    r2: 두 번째 원의 반지름
+    """
+    if d >= r1 + r2:  # 원들이 떨어져 있을 때
+        return 0.0
+    if d <= abs(r1 - r2):  # 한 원이 다른 원 안에 완전히 포함될 때
+        return math.pi * min(r1, r2)**2
 
-# 사용자 입력 매개변수
-t_0 = st.sidebar.slider("최대 밝기 시간 (t_0)", -5.0, 5.0, 0.0, 0.1)
-u_0 = st.sidebar.slider("최소 접근 거리 (u_0)", 0.01, 2.0, 0.1, 0.01)
-t_E = st.sidebar.slider("아인슈타인 시간 (t_E)", 1.0, 20.0, 5.0, 0.1)
-num_points = st.sidebar.slider("데이터 포인트 수", 50, 500, 200, 10)
+    # 일반적인 교차 상황
+    a = r1**2
+    b = r2**2
+    x = (a - b + d**2) / (2 * d)
+    y = math.sqrt(a - x**2) if a >= x**2 else 0 # Ensure non-negative value for sqrt
 
-st.sidebar.markdown("---")
-st.sidebar.info(
-    "**매개변수 설명:**\n\n"
-    "- **t_0:** 배경별이 렌즈에 가장 가까이 접근하는 시간입니다. 광도곡선의 피크 위치를 결정합니다.\n"
-    "- **u_0:** 렌즈 중심으로부터 배경별까지의 최소 거리입니다. 아인슈타인 반지름(Einstein Radius) 단위로, 작을수록 렌즈 효과가 강해집니다.\n"
-    "- **t_E:** 아인슈타인 시간입니다. 아인슈타인 반지름을 배경별이 가로지르는 시간으로, 광도곡선의 폭을 결정합니다."
-)
+    area = a * math.acos(x / r1) + b * math.acos((d - x) / r2) - d * y
+    return area
 
-# 시뮬레이션 실행
-t_start = t_0 - 3 * t_E
-t_end = t_0 + 3 * t_E
-times, magnifications = simulate_microlensing_lightcurve(t_start, t_end, num_points, t_0, u_0, t_E)
+# --- 시뮬레이션 파라미터 설정 ---
+with st.sidebar:
+    st.header("시뮬레이션 설정")
+    light_source_radius = st.slider("광원 반지름 (px)", 10, 100, 50)
+    occluder_radius = st.slider("가림막 원 반지름 (px)", 10, 100, 40)
+    occluder_speed = st.slider("가림막 원 이동 속도", 0.1, 5.0, 1.0)
+    initial_light_intensity = st.slider("초기 빛 강도 (최대 밝기)", 100, 1000, 500)
+    simulation_duration = st.slider("시뮬레이션 지속 시간 (초)", 10, 60, 30)
 
-st.header("시뮬레이션 결과: 광도 곡선")
+    start_button = st.button("시뮬레이션 시작")
+    stop_button = st.button("시뮬레이션 정지")
 
-# Plotting with Matplotlib
-fig, ax = plt.subplots(figsize=(10, 6))
-ax.plot(times, magnifications, color='skyblue', linewidth=2)
-ax.set_xlabel("시간 (Time, Normalized)", fontsize=12)
-ax.set_ylabel("밝기 확대율 (Magnification)", fontsize=12)
-ax.set_title("미세 중력 렌즈 광도 곡선", fontsize=14)
-ax.grid(True, linestyle='--', alpha=0.7)
-ax.set_ylim(bottom=0.9, top=max(magnifications) * 1.1 + 0.1) # Y축 범위 조정
-st.pyplot(fig)
+# --- 시뮬레이션 영역 준비 ---
+col1, col2 = st.columns([1, 1])
 
-st.subheader("결과 해석")
-st.write(
-    f"설정된 매개변수 (t_0={t_0}, u_0={u_0}, t_E={t_E})에 따라 시뮬레이션된 광도 곡선입니다. "
-    f"u_0 값이 작을수록 밝기 확대율이 커지며, t_E 값이 클수록 이벤트 지속 시간이 길어집니다. "
-    f"이러한 광도 곡선은 실제 천문 관측에서 외계행성의 존재를 간접적으로 확인하는 데 사용됩니다."
-)
-st.markdown("---")
-st.markdown("Made with ❤️ by [Your Name or Organization]")
+with col1:
+    st.subheader("원 시각화")
+    # Matplotlib으로 원을 그릴 준비
+    fig_circles, ax_circles = plt.subplots(figsize=(6, 6))
+    ax_circles.set_xlim(-200, 200)
+    ax_circles.set_ylim(-200, 200)
+    ax_circles.set_aspect('equal', adjustable='box')
+    ax_circles.grid(True)
+    circle_plot_placeholder = st.pyplot(fig_circles) # Matplotlib 그래프 placeholder
+
+with col2:
+    st.subheader("빛의 밝기 그래프")
+    # Plotly 그래프를 담을 빈 컨테이너 생성
+    brightness_chart_placeholder = st.empty()
+
+# --- 시뮬레이션 실행 ---
+if start_button:
+    st.session_state.run_simulation = True
+    # 그래프 데이터 초기화
+    brightness_history = []
+    time_points = []
+    start_time = time.time()
+    current_time = 0
+
+    # 광원 원 (고정)
+    light_source_x, light_source_y = 0, 0
+    light_source_area = math.pi * light_source_radius**2
+    
+    # 가림막 원 초기 위치
+    occluder_x = -200 - occluder_radius # 화면 왼쪽 밖에서 시작
+    occluder_y = 0
+
+    status_text = st.empty()
+
+    while st.session_state.get('run_simulation', False) and current_time < simulation_duration:
+        elapsed_time = time.time() - start_time
+        current_time = elapsed_time
+
+        # 가림막 원 이동
+        occluder_x += occluder_speed * 2 # 속도에 2를 곱하여 실제 이동 거리 증가 (프레임당 이동 거리)
+        if occluder_x > 200 + occluder_radius: # 화면 오른쪽 밖으로 나가면 다시 시작
+            occluder_x = -200 - occluder_radius
+
+        # 두 원의 중심 간 거리 계산
+        distance = math.sqrt((occluder_x - light_source_x)**2 + (occluder_y - light_source_y)**2)
+
+        # 교차 면적 계산
+        intersect_area = circle_intersection_area(distance, light_source_radius, occluder_radius)
+
+        # 가려지지 않은 면적 = 광원 전체 면적 - 교차 면적
+        unobscured_area = light_source_area - intersect_area
+        
+        # 밝기 계산 (가려지지 않은 면적에 비례)
+        # 0으로 나누는 것을 방지
+        if light_source_area > 0:
+            current_brightness = (unobscured_area / light_source_area) * initial_light_intensity
+        else:
+            current_brightness = 0
+
+        # 데이터 저장
+        brightness_history.append(current_brightness)
+        time_points.append(current_time)
+
+        # --- 원 시각화 업데이트 (Matplotlib) ---
+        ax_circles.clear() # 이전 그림 지우기
+        ax_circles.set_xlim(-200, 200)
+        ax_circles.set_ylim(-200, 200)
+        ax_circles.set_aspect('equal', adjustable='box')
+        ax_circles.grid(True)
+
+        # 광원 원 그리기 (주황색)
+        light_source_circle = plt.Circle((light_source_x, light_source_y), light_source_radius, 
+                                         color='orange', alpha=0.7, ec='black', lw=2)
+        ax_circles.add_patch(light_source_circle)
+
+        # 가림막 원 그리기 (파란색)
+        occluder_circle = plt.Circle((occluder_x, occluder_y), occluder_radius, 
+                                     color='blue', alpha=0.5, ec='black', lw=2)
+        ax_circles.add_patch(occluder_circle)
+
+        ax_circles.set_title(f"가림막 원 위치: ({occluder_x:.1f}, {occluder_y:.1f})")
+        circle_plot_placeholder.pyplot(fig_circles)
+
+        # --- 밝기 그래프 업데이트 (Plotly) ---
+        fig_brightness = go.Figure(data=go.Scatter(x=list(time_points), y=list(brightness_history), 
+                                                    mode='lines', name='밝기'))
+        fig_brightness.update_layout(
+            title="시간에 따른 빛의 밝기 변화",
+            xaxis_title="시간 (초)",
+            yaxis_title="밝기",
+            yaxis_range=[0, initial_light_intensity * 1.1] # Y축 범위 고정
+        )
+        brightness_chart_placeholder.plotly_chart(fig_brightness, use_container_width=True)
+
+        status_text.info(f"현재 밝기: {current_brightness:.2f} | 진행 시간: {current_time:.1f}초")
+
+        time.sleep(0.05) # 업데이트 간격 조절
+
+    status_text.success("시뮬레이션 종료")
+
+if stop_button:
+    st.session_state.run_simulation = False
+    st.info("시뮬레이션이 중지되었습니다.")
+
+# 초기 상태 메시지
+if 'run_simulation' not in st.session_state:
+    st.info("시뮬레이션 시작 버튼을 눌러주세요.")
