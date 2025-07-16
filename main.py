@@ -1,57 +1,53 @@
-
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
+from microlensing_simulation import simulate_microlensing_lightcurve # 위에서 만든 시뮬레이션 함수 임포트
 
-# 아인슈타인 반지름 계산 함수
-def einstein_radius(M, D_lens, D_source):
-    G = 6.67430e-11  # 중력 상수 (m^3 kg^-1 s^-2)
-    c = 3.0e8  # 빛의 속도 (m/s)
-    
-    # 아인슈타인 반지름 계산 (m 단위)
-    return np.sqrt((4 * G * M) / (c**2 * D_lens * (D_source - D_lens)))
+st.set_page_config(layout="wide")
 
-# 렌즈 천체와 배경 천체 설정
-M_lens = st.slider("렌즈 천체의 질량 (kg)", min_value=int(1e28), max_value=int(1e32), value=int(1e30), step=int(1e28))
-D_lens = st.slider("렌즈 천체와 관찰자 사이의 거리 (m)", min_value=int(1e20), max_value=int(1e22), value=int(1e21), step=int(1e20))
-D_source = st.slider("렌즈 천체와 배경 천체 사이의 거리 (m)", min_value=int(1e22), max_value=int(1e24), value=int(1.5e22), step=int(1e22))
+st.title("외계행성 미세 중력 관측 시뮬레이션")
+st.markdown("""
+이 앱은 미세 중력 렌즈 현상(Microlensing)을 시뮬레이션하여 외계행성 탐색 원리를 시각적으로 보여줍니다.
+""")
 
-# 아인슈타인 반지름 계산
-R_einstein = einstein_radius(M_lens, D_lens, D_source)
+st.sidebar.header("시뮬레이션 매개변수 설정")
 
-# 시뮬레이션 파라미터
-num_points = 1000  # 시간에 따른 시뮬레이션 포인트 수
-t = np.linspace(-1, 1, num_points)  # 시간 변수 (렌즈 천체가 이동하는 것처럼 보이게)
+# 사용자 입력 매개변수
+t_0 = st.sidebar.slider("최대 밝기 시간 (t_0)", -5.0, 5.0, 0.0, 0.1)
+u_0 = st.sidebar.slider("최소 접근 거리 (u_0)", 0.01, 2.0, 0.1, 0.01)
+t_E = st.sidebar.slider("아인슈타인 시간 (t_E)", 1.0, 20.0, 5.0, 0.1)
+num_points = st.sidebar.slider("데이터 포인트 수", 50, 500, 200, 10)
 
-# 렌즈 천체의 위치 변화 (단순한 선형 이동 모델)
-r_t = R_einstein * np.sqrt(1 + t**2)  # 렌즈 천체가 이동하는 거리
+st.sidebar.markdown("---")
+st.sidebar.info(
+    "**매개변수 설명:**\n\n"
+    "- **t_0:** 배경별이 렌즈에 가장 가까이 접근하는 시간입니다. 광도곡선의 피크 위치를 결정합니다.\n"
+    "- **u_0:** 렌즈 중심으로부터 배경별까지의 최소 거리입니다. 아인슈타인 반지름(Einstein Radius) 단위로, 작을수록 렌즈 효과가 강해집니다.\n"
+    "- **t_E:** 아인슈타인 시간입니다. 아인슈타인 반지름을 배경별이 가로지르는 시간으로, 광도곡선의 폭을 결정합니다."
+)
 
-# 미세 중력 렌즈 효과에 의한 밝기 변화 계산
-def micro_lensing_brightness(r_t, R_einstein):
-    """
-    미세 중력 렌즈 효과로 인한 밝기 변화 계산
-    r_t: 렌즈 천체와 배경 천체 사이의 거리 (시간에 따라 변화)
-    R_einstein: 아인슈타인 반지름
-    """
-    return 1 / (1 - (R_einstein / r_t)**2)
+# 시뮬레이션 실행
+t_start = t_0 - 3 * t_E
+t_end = t_0 + 3 * t_E
+times, magnifications = simulate_microlensing_lightcurve(t_start, t_end, num_points, t_0, u_0, t_E)
 
-# 밝기 계산
-brightness = micro_lensing_brightness(r_t, R_einstein)
+st.header("시뮬레이션 결과: 광도 곡선")
 
-# Streamlit 앱에서 시각화
-st.title("미세 중력 렌즈 효과 시뮬레이션")
-
-st.write(f"계산된 아인슈타인 반지름: {R_einstein:.2e} meters")
-
-# 밝기 변화 그래프
-fig, ax = plt.subplots(figsize=(8, 6))
-ax.plot(t, brightness, label='밝기 변화 (미세 중력 렌즈)', color='blue')
-ax.axhline(1, color='k', linestyle='--', label='원래 밝기')
-ax.set_title("미세 중력 렌즈 효과에 의한 밝기 변화")
-ax.set_xlabel("시간 (렌즈 천체의 위치 변화)")
-ax.set_ylabel("밝기 (Normalized Flux)")
-ax.legend()
-ax.grid(True)
-
+# Plotting with Matplotlib
+fig, ax = plt.subplots(figsize=(10, 6))
+ax.plot(times, magnifications, color='skyblue', linewidth=2)
+ax.set_xlabel("시간 (Time, Normalized)", fontsize=12)
+ax.set_ylabel("밝기 확대율 (Magnification)", fontsize=12)
+ax.set_title("미세 중력 렌즈 광도 곡선", fontsize=14)
+ax.grid(True, linestyle='--', alpha=0.7)
+ax.set_ylim(bottom=0.9, top=max(magnifications) * 1.1 + 0.1) # Y축 범위 조정
 st.pyplot(fig)
 
+st.subheader("결과 해석")
+st.write(
+    f"설정된 매개변수 (t_0={t_0}, u_0={u_0}, t_E={t_E})에 따라 시뮬레이션된 광도 곡선입니다. "
+    f"u_0 값이 작을수록 밝기 확대율이 커지며, t_E 값이 클수록 이벤트 지속 시간이 길어집니다. "
+    f"이러한 광도 곡선은 실제 천문 관측에서 외계행성의 존재를 간접적으로 확인하는 데 사용됩니다."
+)
+st.markdown("---")
+st.markdown("Made with ❤️ by [Your Name or Organization]")
