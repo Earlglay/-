@@ -2,171 +2,242 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 import time
-import math
-import matplotlib.pyplot as plt
+import pandas as pd
 
 # --- 페이지 설정 ---
-st.set_page_config(layout="wide") # 넓은 레이아웃 사용
+st.set_page_config(layout="wide")
 
-st.title("원형 광원과 가림막 원 시뮬레이션")
+st.title("미세 중력 시뮬레이션: 상호 작용하는 구체들")
 
 st.markdown("""
-이 앱은 원형 광원이 있고, 다른 원이 그 광원 앞을 지나갈 때 빛의 밝기가 어떻게 변하는지 실시간으로 보여줍니다.
-가림막 원이 광원을 가리는 면적에 따라 빛의 밝기(그래프)가 변화합니다.
+이 시뮬레이션은 여러 개의 작은 구(Ball)들이 미세 중력 환경에서 서로에게 약한 중력을 행사하며 움직이는 모습을 보여줍니다.
+각 구는 질량에 비례하는 인력으로 서로를 끌어당기며, 벽에 닿으면 튕겨 나옵니다.
 """)
 
-# --- 두 원의 교차 면적 계산 함수 ---
-# 출처: https://stackoverflow.com/questions/42436329/area-of-intersection-of-two-circles
-def calculate_circle_intersection_area(d, r1, r2):
-    """
-    두 원의 교차 면적을 계산합니다.
-    d: 두 원의 중심 간 거리
-    r1: 첫 번째 원의 반지름
-    r2: 두 번째 원의 반지름
-    """
-    if d >= r1 + r2:  # 원들이 완전히 떨어져 있을 때
-        return 0.0
-    if d <= abs(r1 - r2):  # 한 원이 다른 원 안에 완전히 포함될 때
-        return math.pi * min(r1, r2)**2
-
-    # 일반적인 교차 상황
-    a = r1**2
-    b = r2**2
-    x = (a - b + d**2) / (2 * d)
-    # y는 0보다 작을 수 없으므로, math.sqrt에 넣기 전에 조건 확인
-    y = math.sqrt(a - x**2) if a >= x**2 else 0
-
-    area = a * math.acos(x / r1) + b * math.acos((d - x) / r2) - d * y
-    return area
-
-# --- 사이드바: 시뮬레이션 파라미터 설정 ---
+# --- 시뮬레이션 파라미터 설정 ---
 with st.sidebar:
     st.header("시뮬레이션 설정")
-    light_source_radius = st.slider("광원 반지름 (px)", 10, 100, 50)
-    occluder_radius = st.slider("가림막 원 반지름 (px)", 10, 100, 40)
-    occluder_speed = st.slider("가림막 원 이동 속도", 0.1, 5.0, 1.0)
-    initial_light_intensity = st.slider("초기 빛 강도 (최대 밝기)", 100, 1000, 500)
+    num_balls = st.slider("구의 개수", 2, 10, 5)
     simulation_duration = st.slider("시뮬레이션 지속 시간 (초)", 10, 60, 30)
+    gravity_constant = st.slider("중력 상수 (G)", 0.01, 0.5, 0.05, 0.01)
+    ball_mass_range = st.slider("구 질량 범위", 1, 10, (2, 8)) # (최소, 최대)
+    ball_radius_multiplier = st.slider("구 반지름 배수", 0.1, 1.0, 0.5, 0.1) # 반지름 = 질량 * 배수
 
     start_button = st.button("시뮬레이션 시작")
     stop_button = st.button("시뮬레이션 정지")
 
+# --- 구체 클래스 정의 ---
+class Ball:
+    def __init__(self, x, y, mass, radius, color):
+        self.x = x
+        self.y = y
+        self.vx = (np.random.rand() - 0.5) * 5 # 초기 속도 (랜덤)
+        self.vy = (np.random.rand() - 0.5) * 5
+        self.mass = mass
+        self.radius = radius
+        self.color = color
+
+    def update_position(self, dt):
+        self.x += self.vx * dt
+        self.y += self.vy * dt
+
+    def apply_force(self, fx, fy, dt):
+        # F = ma -> a = F/m
+        ax = fx / self.mass
+        ay = fy / self.mass
+        self.vx += ax * dt
+        self.vy += ay * dt
+
+    def check_boundary_collision(self, min_x, max_x, min_y, max_y):
+        # X축 경계 충돌
+        if self.x - self.radius < min_x:
+            self.x = min_x + self.radius
+            self.vx *= -1 * 0.9 # 속도 반전 및 약간의 에너지 손실
+        elif self.x + self.radius > max_x:
+            self.x = max_x - self.radius
+            self.vx *= -1 * 0.9
+
+        # Y축 경계 충돌
+        if self.y - self.radius < min_y:
+            self.y = min_y + self.radius
+            self.vy *= -1 * 0.9
+        elif self.y + self.radius > max_y:
+            self.y = max_y - self.radius
+            self.vy *= -1 * 0.9
+
 # --- 메인 콘텐츠 영역 준비 ---
-col1, col2 = st.columns([1, 1])
+col1, col2 = st.columns([2, 1]) # 시각화 영역을 더 넓게
 
 with col1:
-    st.subheader("원 시각화")
-    # Matplotlib으로 원을 그릴 준비
-    # figsize는 Streamlit에 표시될 때의 비율에 영향을 줍니다.
-    fig_circles, ax_circles = plt.subplots(figsize=(6, 6))
-    ax_circles.set_xlim(-200, 200) # X축 범위 고정
-    ax_circles.set_ylim(-200, 200) # Y축 범위 고정
-    ax_circles.set_aspect('equal', adjustable='box') # X, Y축 비율을 같게
-    ax_circles.grid(True) # 그리드 표시
-    circle_plot_placeholder = st.pyplot(fig_circles) # Matplotlib 그래프를 위한 플레이스홀더
+    st.subheader("미세 중력 시뮬레이션")
+    # Plotly 그래프를 담을 빈 컨테이너 생성
+    # 2D 산점도 그래프로 구체들의 위치를 표시
+    simulation_plot_placeholder = st.empty()
 
 with col2:
-    st.subheader("빛의 밝기 그래프")
-    # Plotly 그래프를 담을 빈 컨테이너 생성
-    brightness_chart_placeholder = st.empty()
+    st.subheader("시뮬레이션 정보")
+    info_text = st.empty() # 시뮬레이션 정보 텍스트를 위한 플레이스홀더
+    st.subheader("밝기 변화 그래프 (예시 - 현재는 구 구현에 집중)")
+    # 밝기 변화 그래프는 이 시뮬레이션의 기본 목적이 아니므로,
+    # 여기서는 "구의 평균 속도 변화" 그래프로 대체하거나 비활성화합니다.
+    # 만약 각 구가 '광원'이라면 그에 따른 '밝기'를 정의해야 합니다.
+    # 현재는 '미세 중력' 자체에 집중하겠습니다.
+    avg_speed_chart_placeholder = st.empty() # 평균 속도 그래프 플레이스홀더
 
 # --- 시뮬레이션 실행 로직 ---
-# 세션 상태를 사용하여 시뮬레이션 실행 여부를 관리
 if 'run_simulation' not in st.session_state:
     st.session_state.run_simulation = False
 
 if start_button:
     st.session_state.run_simulation = True
-    # 그래프 데이터 초기화
-    brightness_history = []
-    time_points = []
-    start_time = time.time() # 시뮬레이션 시작 시간 기록
+    
+    # 구체 초기화
+    balls = []
+    colors = plt.cm.get_cmap('hsv', num_balls) # 구의 개수만큼 색상 생성
+    for i in range(num_balls):
+        mass = np.random.uniform(ball_mass_range[0], ball_mass_range[1])
+        radius = mass * ball_radius_multiplier
+        x = np.random.uniform(-100 + radius, 100 - radius) # 초기 위치 랜덤
+        y = np.random.uniform(-100 + radius, 100 - radius)
+        balls.append(Ball(x, y, mass, radius, colors(i)))
+
+    start_time = time.time()
     current_time = 0
+    dt = 0.1 # 시간 간격 (Time step)
 
-    # 광원 원 (고정 위치)
-    light_source_x, light_source_y = 0, 0
-    light_source_area = math.pi * light_source_radius**2 # 광원 전체 면적 계산
-
-    # 가림막 원 초기 위치 (왼쪽 화면 밖에서 시작)
-    occluder_x = -200 - occluder_radius
-    occluder_y = 0 # Y축은 고정
-
-    # 시뮬레이션 상태 메시지 표시를 위한 플레이스홀더
-    status_text = st.empty()
+    # 그래프 데이터 초기화
+    avg_speeds_history = []
+    time_points_history = []
 
     # 시뮬레이션 루프
     while st.session_state.run_simulation and current_time < simulation_duration:
         elapsed_time = time.time() - start_time
         current_time = elapsed_time
 
-        # 가림막 원의 X 위치 업데이트 (이동 속도 적용)
-        # 속도에 2를 곱하여 시뮬레이션마다 이동하는 거리 조정
-        occluder_x += occluder_speed * 2
+        # --- 중력 계산 및 힘 적용 ---
+        for i, ball1 in enumerate(balls):
+            fx = 0
+            fy = 0
+            for j, ball2 in enumerate(balls):
+                if i != j: # 자기 자신에게는 힘을 가하지 않음
+                    dx = ball2.x - ball1.x
+                    dy = ball2.y - ball1.y
+                    distance = math.sqrt(dx**2 + dy**2)
+
+                    if distance < ball1.radius + ball2.radius: # 구체 간 충돌 처리 (간단하게 튕겨나가게)
+                        # 충돌 시 속도 반전 (매우 단순화된 모델)
+                        angle = math.atan2(dy, dx)
+                        total_velocity_x = ball1.vx + ball2.vx
+                        total_velocity_y = ball1.vy + ball2.vy
+
+                        # 서로 밀어내기
+                        overlap = (ball1.radius + ball2.radius) - distance
+                        ball1.x -= overlap * np.cos(angle) / 2
+                        ball1.y -= overlap * np.sin(angle) / 2
+                        ball2.x += overlap * np.cos(angle) / 2
+                        ball2.y += overlap * np.sin(angle) / 2
+
+                        # 속도 교환 (단순화된 탄성 충돌)
+                        v1_n = ball1.vx * np.cos(angle) + ball1.vy * np.sin(angle)
+                        v1_t = -ball1.vx * np.sin(angle) + ball1.vy * np.cos(angle)
+                        v2_n = ball2.vx * np.cos(angle) + ball2.vy * np.sin(angle)
+                        v2_t = -ball2.vx * np.sin(angle) + ball2.vy * np.cos(angle)
+
+                        # 1D 충돌 공식 (질량 고려)
+                        new_v1_n = ((ball1.mass - ball2.mass) * v1_n + 2 * ball2.mass * v2_n) / (ball1.mass + ball2.mass)
+                        new_v2_n = ((ball2.mass - ball1.mass) * v2_n + 2 * ball1.mass * v1_n) / (ball1.mass + ball2.mass)
+                        
+                        ball1.vx = new_v1_n * np.cos(angle) - v1_t * np.sin(angle)
+                        ball1.vy = new_v1_n * np.sin(angle) + v1_t * np.cos(angle)
+                        ball2.vx = new_v2_n * np.cos(angle) - v2_t * np.sin(angle)
+                        ball2.vy = new_v2_n * np.sin(angle) + v2_t * np.cos(angle)
+
+
+                    # 거리가 0이 되는 것을 방지 (중력 공식에 사용)
+                    if distance == 0:
+                        continue
+                    
+                    # 중력 법칙 F = G * (m1 * m2) / r^2
+                    force_magnitude = (gravity_constant * ball1.mass * ball2.mass) / (distance**2)
+
+                    # 힘의 방향 벡터
+                    force_x = force_magnitude * (dx / distance)
+                    force_y = force_magnitude * (dy / distance)
+
+                    fx += force_x
+                    fy += force_y
+            
+            ball1.apply_force(fx, fy, dt) # 계산된 힘 적용
+            ball1.update_position(dt) # 위치 업데이트
+            ball1.check_boundary_collision(-150, 150, -150, 150) # 경계 충돌 확인 (시뮬레이션 공간)
+
+        # --- 시각화 업데이트 (Plotly) ---
+        traces = []
+        avg_speed = 0
+        for ball in balls:
+            traces.append(
+                go.Scatter(
+                    x=[ball.x],
+                    y=[ball.y],
+                    mode='markers',
+                    marker=dict(
+                        size=ball.radius * 2, # 반지름 * 2 = 지름
+                        color=ball.color,
+                        opacity=0.8,
+                        line=dict(width=1, color='Black')
+                    ),
+                    name=f'Mass: {ball.mass:.1f}',
+                    showlegend=True
+                )
+            )
+            avg_speed += math.sqrt(ball.vx**2 + ball.vy**2)
         
-        # 가림막 원이 화면 오른쪽 밖으로 나가면 다시 왼쪽 밖으로 이동
-        if occluder_x > 200 + occluder_radius:
-            occluder_x = -200 - occluder_radius
+        avg_speed /= len(balls)
+        avg_speeds_history.append(avg_speed)
+        time_points_history.append(current_time)
 
-        # 두 원의 중심 간 거리 계산
-        distance = math.sqrt((occluder_x - light_source_x)**2 + (occluder_y - light_source_y)**2)
-
-        # 교차 면적 계산
-        intersect_area = calculate_circle_intersection_area(distance, light_source_radius, occluder_radius)
-
-        # 가려지지 않은 면적 = 광원 전체 면적 - 교차 면적
-        unobscured_area = light_source_area - intersect_area
-
-        # 현재 밝기 계산 (가려지지 않은 면적에 비례)
-        # 광원 면적이 0이 아닐 경우에만 계산하여 ZeroDivisionError 방지
-        if light_source_area > 0:
-            current_brightness = (unobscured_area / light_source_area) * initial_light_intensity
-        else:
-            current_brightness = 0 # 광원 면적이 0이면 밝기도 0
-
-        # 데이터 저장
-        brightness_history.append(current_brightness)
-        time_points.append(current_time)
-
-        # --- 원 시각화 업데이트 (Matplotlib) ---
-        ax_circles.clear() # 이전 그림 지우기
-        ax_circles.set_xlim(-200, 200) # 축 범위 다시 설정 (clear() 때문에 초기화됨)
-        ax_circles.set_ylim(-200, 200)
-        ax_circles.set_aspect('equal', adjustable='box')
-        ax_circles.grid(True)
-
-        # 광원 원 그리기 (주황색, 반투명)
-        light_source_circle = plt.Circle((light_source_x, light_source_y), light_source_radius,
-                                         color='orange', alpha=0.7, ec='black', lw=2)
-        ax_circles.add_patch(light_source_circle)
-
-        # 가림막 원 그리기 (파란색, 반투명)
-        occluder_circle = plt.Circle((occluder_x, occluder_y), occluder_radius,
-                                     color='blue', alpha=0.5, ec='black', lw=2)
-        ax_circles.add_patch(occluder_circle)
-
-        ax_circles.set_title(f"가림막 원 위치: ({occluder_x:.1f}, {occluder_y:.1f})")
-        circle_plot_placeholder.pyplot(fig_circles) # 업데이트된 Matplotlib 그림을 Streamlit에 표시
-
-        # --- 밝기 그래프 업데이트 (Plotly) ---
-        fig_brightness = go.Figure(data=go.Scatter(x=list(time_points), y=list(brightness_history),
-                                                    mode='lines', name='밝기', line=dict(color='green', width=2)))
-        fig_brightness.update_layout(
-            title="시간에 따른 빛의 밝기 변화",
-            xaxis_title="시간 (초)",
-            yaxis_title="밝기",
-            yaxis_range=[0, initial_light_intensity * 1.1], # Y축 범위 고정 (최대 밝기보다 약간 크게)
-            height=400 # 그래프 높이 조정
+        fig_sim = go.Figure(data=traces)
+        fig_sim.update_layout(
+            title=f"시간: {current_time:.2f} 초",
+            xaxis_title="X 위치",
+            yaxis_title="Y 위치",
+            xaxis_range=[-150, 150], # 시뮬레이션 공간 범위 고정
+            yaxis_range=[-150, 150],
+            width=700, # 그래프 너비
+            height=700, # 그래프 높이
+            showlegend=True,
+            hovermode="closest"
         )
-        brightness_chart_placeholder.plotly_chart(fig_brightness, use_container_width=True) # 업데이트된 Plotly 그래프 표시
+        simulation_plot_placeholder.plotly_chart(fig_sim, use_container_width=False) # 고정 크기 사용
 
-        # 현재 상태 메시지 업데이트
-        status_text.info(f"현재 밝기: {current_brightness:.2f} | 진행 시간: {current_time:.1f}초")
+        # --- 정보 텍스트 업데이트 ---
+        info_text.markdown(f"""
+            **진행 시간:** {current_time:.2f} 초 / {simulation_duration} 초
+            **평균 구 속도:** {avg_speed:.2f}
+            ---
+            **구 정보:**
+            """)
+        for i, ball in enumerate(balls):
+            info_text.markdown(f"""
+                - **구 {i+1}**: 질량={ball.mass:.1f}, 속도=({ball.vx:.1f}, {ball.vy:.1f})
+                """)
 
-        time.sleep(0.05) # 각 프레임 간의 딜레이 (애니메이션 속도 조절)
+        # --- 평균 속도 그래프 업데이트 ---
+        fig_avg_speed = go.Figure(data=go.Scatter(x=list(time_points_history), y=list(avg_speeds_history),
+                                                  mode='lines', name='평균 속도', line=dict(color='purple', width=2)))
+        fig_avg_speed.update_layout(
+            title="시간에 따른 구의 평균 속도 변화",
+            xaxis_title="시간 (초)",
+            yaxis_title="평균 속도",
+            height=300
+        )
+        avg_speed_chart_placeholder.plotly_chart(fig_avg_speed, use_container_width=True)
+
+        time.sleep(0.01) # 업데이트 간격 조절 (짧을수록 부드럽지만 CPU 사용량 증가)
 
     # 시뮬레이션 종료 후 메시지
     if st.session_state.run_simulation: # 사용자가 중지 버튼을 누르지 않고 시간이 다 된 경우
-        status_text.success("시뮬레이션이 완료되었습니다.")
+        info_text.success("시뮬레이션이 완료되었습니다.")
     st.session_state.run_simulation = False # 시뮬레이션 종료 상태로 변경
 
 if stop_button:
