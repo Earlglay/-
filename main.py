@@ -144,4 +144,35 @@ if start_button:
                                      color='blue', alpha=0.5, ec='black', lw=2)
         ax_circles.add_patch(occluder_circle)
 
-        ax_circles.set
+        ax_circles.set_title(f"가림막 원 위치: ({occluder_x:.1f}, {occluder_y:.1f})")
+        circle_plot_placeholder.pyplot(fig_circles) # 업데이트된 Matplotlib 그림을 Streamlit에 표시
+
+        # --- 밝기 그래프 업데이트 (Plotly) ---
+        fig_brightness = go.Figure(data=go.Scatter(x=list(time_points), y=list(brightness_history),
+                                                    mode='lines', name='밝기', line=dict(color='green', width=2)))
+        fig_brightness.update_layout(
+            title="시간에 따른 빛의 밝기 변화",
+            xaxis_title="시간 (초)",
+            yaxis_title="밝기",
+            yaxis_range=[0, initial_light_intensity * 1.1], # Y축 범위 고정 (최대 밝기보다 약간 크게)
+            height=400 # 그래프 높이 조정
+        )
+        brightness_chart_placeholder.plotly_chart(fig_brightness, use_container_width=True) # 업데이트된 Plotly 그래프 표시
+
+        # 현재 상태 메시지 업데이트
+        status_text.info(f"현재 밝기: {current_brightness:.2f} | 진행 시간: {current_time:.1f}초")
+
+        time.sleep(0.05) # 각 프레임 간의 딜레이 (애니메이션 속도 조절)
+
+    # 시뮬레이션 종료 후 메시지
+    if st.session_state.run_simulation: # 사용자가 중지 버튼을 누르지 않고 시간이 다 된 경우
+        status_text.success("시뮬레이션이 완료되었습니다.")
+    st.session_state.run_simulation = False # 시뮬레이션 종료 상태로 변경
+
+if stop_button:
+    st.session_state.run_simulation = False
+    st.info("시뮬레이션이 중지되었습니다.")
+
+# 초기 상태 메시지
+if not st.session_state.run_simulation and 'start_time' not in st.session_state:
+    st.info("시뮬레이션 시작 버튼을 눌러주세요.")
